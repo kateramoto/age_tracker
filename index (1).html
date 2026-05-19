@@ -1,0 +1,626 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <meta name="apple-mobile-web-app-title" content="Baby Watch" />
+  <title>Baby Watch 🌸</title>
+  <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@700&family=DM+Sans:ital,wght@0,400;0,500;0,600;0,700;1,400&display=swap" rel="stylesheet" />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { height: 100%; background: #faf8f3; }
+    body { font-family: 'DM Sans', 'Helvetica Neue', sans-serif; -webkit-tap-highlight-color: transparent; }
+    input, textarea, button, select { font-family: inherit; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+
+  <script type="text/babel">
+    const { useState, useEffect, useRef } = React;
+
+    // ─── Constants ─────────────────────────────────────────────────────────────
+
+    const GENDER_OPTIONS = ["Unknown", "Girl", "Boy", "Surprise"];
+    const GENDER_STYLES = {
+      Girl:     { bg: "#fce4ec", accent: "#d81b60", emoji: "🎀" },
+      Boy:      { bg: "#e3f2fd", accent: "#1565c0", emoji: "🩵" },
+      Surprise: { bg: "#f3e5f5", accent: "#6a1b9a", emoji: "🎁" },
+      Unknown:  { bg: "#f5f5f0", accent: "#777",    emoji: "✨" },
+    };
+    const TRIMESTER_COLORS  = ["#fce4ec", "#fff8e1", "#e8f5e9"];
+    const TRIMESTER_ACCENTS = ["#d81b60", "#f57c00", "#2e7d32"];
+    const TRIMESTER_LABELS  = ["1st", "2nd", "3rd"];
+
+    // ─── Helpers ───────────────────────────────────────────────────────────────
+
+    function getTrimester(weeks) {
+      if (weeks <= 13) return 1;
+      if (weeks <= 26) return 2;
+      return 3;
+    }
+    function getWeeksFromDueDate(dueDate) {
+      const days = 280 - Math.round((new Date(dueDate) - new Date()) / 86400000);
+      return Math.max(0, Math.min(42, Math.round(days / 7)));
+    }
+    function getDueDateFromWeeks(weeks) {
+      const d = new Date();
+      d.setDate(d.getDate() + (40 - weeks) * 7);
+      return d.toISOString().split("T")[0];
+    }
+    function getAge(birthDate) {
+      const birth = new Date(birthDate + "T12:00:00");
+      const now = new Date();
+      let years  = now.getFullYear() - birth.getFullYear();
+      let months = now.getMonth()    - birth.getMonth();
+      let days   = now.getDate()     - birth.getDate();
+      if (days   < 0) months--;
+      if (months < 0) { years--; months += 12; }
+      const totalMonths = years * 12 + months;
+      const diffDays    = Math.floor((now - birth) / 86400000);
+      return { years, months, totalMonths, days: diffDays };
+    }
+    function formatAge({ years, months, totalMonths, days }) {
+      if (days < 14)         return `${days}d old`;
+      if (days < 60)         return `${Math.floor(days / 7)}w old`;
+      if (totalMonths < 24)  return `${totalMonths}mo old`;
+      if (months === 0)      return `${years}yr old`;
+      return `${years}yr ${months}mo old`;
+    }
+    function getAgeStage(totalMonths) {
+      if (totalMonths <  3)  return { label: "Newborn", color: "#e91e63", bg: "#fce4ec" };
+      if (totalMonths < 12)  return { label: "Infant",  color: "#ff6f00", bg: "#fff3e0" };
+      if (totalMonths < 36)  return { label: "Toddler", color: "#558b2f", bg: "#f1f8e9" };
+      if (totalMonths < 72)  return { label: "Pre-K",   color: "#1565c0", bg: "#e3f2fd" };
+      return                        { label: "Kid",      color: "#6a1b9a", bg: "#f3e5f5" };
+    }
+    function fmtDate(dateStr) {
+      return new Date(dateStr + "T12:00:00").toLocaleDateString("en-US", {
+        month: "long", day: "numeric", year: "numeric",
+      });
+    }
+    function loadEntries() {
+      try { return JSON.parse(localStorage.getItem("babywatch-entries") || "[]"); } catch { return []; }
+    }
+    function saveEntries(list) {
+      try { localStorage.setItem("babywatch-entries", JSON.stringify(list)); } catch {}
+    }
+
+    // ─── Primitives ────────────────────────────────────────────────────────────
+
+    function Chip({ label, bg, color }) {
+      return (
+        <span style={{ background: bg, color, fontSize: "12px", fontWeight: 600,
+          padding: "4px 10px", borderRadius: "20px", letterSpacing: "0.02em", whiteSpace: "nowrap" }}>
+          {label}
+        </span>
+      );
+    }
+
+    function Btn(bg, color, extra = {}) {
+      return { background: bg, color, border: "none", borderRadius: "8px",
+        padding: "7px 14px", fontSize: "13px", fontWeight: 600,
+        cursor: "pointer", fontFamily: "inherit", ...extra };
+    }
+
+    function MiniRing({ pct, color, label }) {
+      const r = 20, circ = 2 * Math.PI * r, dash = Math.min(pct, 1) * circ;
+      return (
+        <svg width="50" height="50" style={{ transform: "rotate(-90deg)", flexShrink: 0 }}>
+          <circle cx="25" cy="25" r={r} fill="none" stroke="#ece8e0" strokeWidth="4" />
+          <circle cx="25" cy="25" r={r} fill="none" stroke={color} strokeWidth="4"
+            strokeDasharray={`${dash} ${circ}`} strokeLinecap="round"
+            style={{ transition: "stroke-dasharray 0.5s ease" }} />
+          <text x="25" y="25" textAnchor="middle" dominantBaseline="central"
+            style={{ transform: "rotate(90deg)", transformOrigin: "25px 25px",
+              fontSize: "9px", fontWeight: 700, fill: "#444", fontFamily: "inherit" }}>
+            {label}
+          </text>
+        </svg>
+      );
+    }
+
+    function PencilIcon() {
+      return (
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+          strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+          <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+        </svg>
+      );
+    }
+
+    // ─── Swipe card ────────────────────────────────────────────────────────────
+
+    function SwipeCard({ onDelete, children }) {
+      const [offset, setOffset] = useState(0);
+      const [swiped, setSwiped] = useState(false);
+      const startXRef = useRef(null);
+      const DELETE_W = 80;
+
+      function onTouchStart(e) { startXRef.current = e.touches[0].clientX; }
+      function onTouchMove(e) {
+        if (startXRef.current == null) return;
+        const dx = e.touches[0].clientX - startXRef.current;
+        if (swiped) {
+          setOffset(Math.min(0, -DELETE_W + dx));
+        } else {
+          if (dx < 0) setOffset(Math.max(dx, -DELETE_W - 10));
+        }
+      }
+      function onTouchEnd(e) {
+        const dx = startXRef.current != null ? e.changedTouches[0].clientX - startXRef.current : 0;
+        if (swiped) {
+          if (dx > DELETE_W / 2) { setOffset(0); setSwiped(false); }
+          else { setOffset(-DELETE_W); }
+        } else {
+          if (offset < -DELETE_W / 2) { setOffset(-DELETE_W); setSwiped(true); }
+          else { setOffset(0); }
+        }
+        startXRef.current = null;
+      }
+      function close() { setOffset(0); setSwiped(false); }
+
+      return (
+        <div style={{ position: "relative", borderRadius: "16px", overflow: "hidden" }}>
+          <div style={{ position: "absolute", right: 0, top: 0, bottom: 0, width: DELETE_W,
+            background: "#e53935", display: "flex", alignItems: "center", justifyContent: "center",
+            borderRadius: "0 16px 16px 0" }}>
+            <button onClick={() => { close(); onDelete(); }} style={{
+              background: "none", border: "none", color: "#fff", cursor: "pointer",
+              display: "flex", flexDirection: "column", alignItems: "center", gap: "3px",
+              fontFamily: "inherit" }}>
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                <polyline points="3 6 5 6 21 6"/>
+                <path d="M19 6l-1 14H6L5 6"/>
+                <path d="M10 11v6M14 11v6"/>
+                <path d="M9 6V4h6v2"/>
+              </svg>
+              <span style={{ fontSize: "10px", fontWeight: 700 }}>Remove</span>
+            </button>
+          </div>
+          <div
+            style={{ transform: `translateX(${offset}px)`,
+              transition: (offset === 0 || offset === -DELETE_W) ? "transform 0.22s ease" : "none",
+              position: "relative", zIndex: 1 }}
+            onTouchStart={onTouchStart}
+            onTouchMove={onTouchMove}
+            onTouchEnd={onTouchEnd}
+            onClick={swiped ? close : undefined}
+          >
+            {children}
+          </div>
+        </div>
+      );
+    }
+
+    // ─── Cards ─────────────────────────────────────────────────────────────────
+
+    function PregnancyCard({ entry, onEdit, onDelete }) {
+      const t = getTrimester(entry.weeks);
+      const gStyle = GENDER_STYLES[entry.gender] || GENDER_STYLES["Unknown"];
+      const accent = TRIMESTER_ACCENTS[t - 1];
+      return (
+        <SwipeCard onDelete={onDelete}>
+          <div style={{ background: "#fff", border: "1.5px solid #ede8df", borderRadius: "16px",
+            padding: "12px 14px 11px", display: "flex", flexDirection: "column", gap: "9px",
+            boxShadow: "0 1px 10px rgba(0,0,0,0.05)", position: "relative", overflow: "hidden" }}>
+            <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: "3px",
+              background: accent, borderRadius: "16px 16px 0 0" }} />
+            <div style={{ display: "flex", alignItems: "center", gap: "11px", marginTop: "3px" }}>
+              <MiniRing pct={entry.weeks / 40} color={accent} label={`${entry.weeks}w`} />
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontFamily: "'Playfair Display', serif", fontSize: "16px",
+                  fontWeight: 700, color: "#2c2c2c", lineHeight: 1.2 }}>{entry.friendName}</div>
+                {entry.kidName && (
+                  <div style={{ fontSize: "12px", color: accent, fontWeight: 600 }}>🌱 {entry.kidName}</div>
+                )}
+                <div style={{ fontSize: "11px", color: "#bbb", marginTop: "1px" }}>Due {fmtDate(entry.dueDate)}</div>
+              </div>
+              <button onClick={() => onEdit(entry)} title="Edit" style={{
+                background: "#f5f5f0", border: "none", borderRadius: "8px",
+                width: "32px", height: "32px", display: "flex", alignItems: "center",
+                justifyContent: "center", cursor: "pointer", color: "#777", flexShrink: 0 }}>
+                <PencilIcon />
+              </button>
+            </div>
+            <div style={{ display: "flex", gap: "6px", flexWrap: "wrap" }}>
+              <Chip label={`T${t}`} bg={TRIMESTER_COLORS[t-1]} color={accent} />
+              <Chip label={`${gStyle.emoji} ${entry.gender}`} bg={gStyle.bg} color={gStyle.accent} />
+              <Chip label={`${40 - entry.weeks}w to go`} bg="#f5f5f0" color="#888" />
+              <button onClick={() => onEdit({ ...entry, _convertToBorn: true })}
+                style={{ background: "#e8f5e9", color: "#2e7d32", border: "none", borderRadius: "20px",
+                  padding: "4px 10px", fontSize: "12px", fontWeight: 600, cursor: "pointer",
+                  fontFamily: "inherit", marginLeft: "auto" }}>
+                🎉 arrived
+              </button>
+            </div>
+            {entry.notes && (
+              <div style={{ fontSize: "12px", color: "#aaa", fontStyle: "italic",
+                borderTop: "1px solid #f5f2ed", paddingTop: "7px" }}>{entry.notes}</div>
+            )}
+          </div>
+        </SwipeCard>
+      );
+    }
+
+    function KidCard({ entry, onEdit, onDelete }) {
+      const age = getAge(entry.birthDate);
+      const stage = getAgeStage(age.totalMonths);
+      const gStyle = GENDER_STYLES[entry.gender] || GENDER_STYLES["Unknown"];
+      return (
+        <SwipeCard onDelete={onDelete}>
+          <div style={{ background: "#fff", border: "1.5px solid #ede8df", borderRadius: "16px",
+            padding: "12px 14px 11px", display: "flex", flexDirection: "column", gap: "9px",
+            boxShadow: "0 1px 10px rgba(0,0,0,0.05)", position: "relative", overflow: "hidden" }}>
+            <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: "3px",
+              background: stage.color, borderRadius: "16px 16px 0 0" }} />
+            <div style={{ display: "flex", alignItems: "center", gap: "11px", marginTop: "3px" }}>
+              <MiniRing pct={age.totalMonths / 144} color={stage.color}
+                label={age.totalMonths < 24 ? `${age.totalMonths}m` : `${Math.floor(age.totalMonths/12)}y`} />
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontFamily: "'Playfair Display', serif", fontSize: "16px",
+                  fontWeight: 700, color: "#2c2c2c", lineHeight: 1.2 }}>{entry.friendName}</div>
+                {entry.kidName && (
+                  <div style={{ fontSize: "12px", color: stage.color, fontWeight: 600 }}>
+                    {gStyle.emoji} {entry.kidName}
+                  </div>
+                )}
+                <div style={{ fontSize: "11px", color: "#bbb", marginTop: "1px" }}>Born {fmtDate(entry.birthDate)}</div>
+              </div>
+              <button onClick={() => onEdit(entry)} title="Edit" style={{
+                background: "#f5f5f0", border: "none", borderRadius: "8px",
+                width: "32px", height: "32px", display: "flex", alignItems: "center",
+                justifyContent: "center", cursor: "pointer", color: "#777", flexShrink: 0 }}>
+                <PencilIcon />
+              </button>
+            </div>
+            <div style={{ display: "flex", gap: "6px", flexWrap: "wrap" }}>
+              <Chip label={formatAge(age)} bg={stage.bg} color={stage.color} />
+              <Chip label={stage.label} bg={stage.bg} color={stage.color} />
+              <Chip label={`${gStyle.emoji} ${entry.gender}`} bg={gStyle.bg} color={gStyle.accent} />
+            </div>
+            {entry.notes && (
+              <div style={{ fontSize: "12px", color: "#aaa", fontStyle: "italic",
+                borderTop: "1px solid #f5f2ed", paddingTop: "7px" }}>{entry.notes}</div>
+            )}
+          </div>
+        </SwipeCard>
+      );
+    }
+
+    // ─── Modal ─────────────────────────────────────────────────────────────────
+
+    function Modal({ entry, defaultType, onSave, onClose }) {
+      const isConvert = entry?._convertToBorn;
+      const initType = isConvert ? "born" : entry ? entry.type : (defaultType || "pregnancy");
+      const [type, setType] = useState(initType);
+      const [form, setForm] = useState(() => {
+        if (isConvert) return { friendName: entry.friendName, kidName: entry.kidName || "",
+          gender: entry.gender === "Surprise" ? "Unknown" : entry.gender,
+          birthDate: entry.dueDate, notes: entry.notes || "", inputMode: "birthDate" };
+        if (entry) return { friendName: entry.friendName || "", kidName: entry.kidName || "",
+          gender: entry.gender || "Unknown", dueDate: entry.dueDate || "",
+          weeksInput: entry.weeks ? String(entry.weeks) : "",
+          birthDate: entry.birthDate || "", notes: entry.notes || "",
+          inputMode: entry.inputMode || "dueDate" };
+        return { friendName: "", kidName: "", gender: "Unknown",
+          dueDate: "", weeksInput: "", birthDate: "", notes: "", inputMode: "dueDate" };
+      });
+
+      function set(k, v) { setForm(f => ({ ...f, [k]: v })); }
+
+      function handleSave() {
+        if (!form.friendName.trim()) return alert("Please enter a friend's name.");
+        if (type === "pregnancy") {
+          let weeks, dueDate;
+          if (form.inputMode === "dueDate") {
+            if (!form.dueDate) return alert("Please enter a due date.");
+            weeks = getWeeksFromDueDate(form.dueDate); dueDate = form.dueDate;
+          } else {
+            const w = parseInt(form.weeksInput);
+            if (isNaN(w) || w < 1 || w > 42) return alert("Enter weeks between 1–42.");
+            weeks = w; dueDate = getDueDateFromWeeks(w);
+          }
+          onSave({ type: "pregnancy", id: isConvert ? Date.now() : (entry?.id || Date.now()),
+            friendName: form.friendName.trim(), kidName: form.kidName.trim(),
+            gender: form.gender, weeks, dueDate, notes: form.notes.trim(),
+            inputMode: form.inputMode, _replaceId: isConvert ? entry.id : null });
+        } else {
+          if (!form.birthDate) return alert("Please enter a birth date.");
+          if (getAge(form.birthDate).days < 0) return alert("Birth date can't be in the future.");
+          onSave({ type: "born", id: isConvert ? Date.now() : (entry?.id || Date.now()),
+            friendName: form.friendName.trim(), kidName: form.kidName.trim(),
+            gender: form.gender, birthDate: form.birthDate, notes: form.notes.trim(),
+            _replaceId: isConvert ? entry.id : null });
+        }
+      }
+
+      const inp = { width: "100%", border: "1.5px solid #e0dcd5", borderRadius: "10px",
+        padding: "10px 12px", fontSize: "15px", fontFamily: "inherit", color: "#222",
+        outline: "none", boxSizing: "border-box", background: "#fafaf7" };
+      const lbl = { fontSize: "11px", fontWeight: 700, color: "#999",
+        letterSpacing: "0.09em", textTransform: "uppercase", marginBottom: "5px", display: "block" };
+
+      return (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)",
+          display: "flex", alignItems: "center", justifyContent: "center",
+          zIndex: 100, padding: "16px", overflowY: "auto" }}
+          onClick={e => e.target === e.currentTarget && onClose()}>
+          <div style={{ background: "#fff", borderRadius: "20px", padding: "26px",
+            width: "100%", maxWidth: "420px", display: "flex", flexDirection: "column", gap: "15px",
+            boxShadow: "0 8px 40px rgba(0,0,0,0.18)", margin: "auto" }}>
+
+            <div style={{ fontFamily: "'Playfair Display', serif", fontSize: "21px",
+              fontWeight: 700, color: "#2c2c2c" }}>
+              {isConvert ? "🎉 Baby Arrived!" : entry?.id ? "Edit Entry" : "Add Entry"}
+            </div>
+
+            {!entry?.id && !isConvert && (
+              <div style={{ display: "flex", gap: "8px" }}>
+                {[["pregnancy","🤰 Pregnant"],["born","👶 Born"]].map(([val,lbl2]) => (
+                  <button key={val} onClick={() => setType(val)} style={{
+                    flex: 1, padding: "9px", borderRadius: "10px", border: "none",
+                    fontFamily: "inherit", fontSize: "13px", fontWeight: 700, cursor: "pointer",
+                    background: type === val ? "#2c2c2c" : "#f0ede6",
+                    color: type === val ? "#fff" : "#666" }}>{lbl2}</button>
+                ))}
+              </div>
+            )}
+
+            <div>
+              <label style={lbl}>Friend's Name</label>
+              <input style={inp} value={form.friendName}
+                onChange={e => set("friendName", e.target.value)} placeholder="e.g. Sarah" />
+            </div>
+
+            <div>
+              <label style={lbl}>{type === "pregnancy" ? "Pregnancy nickname" : "Child's name"}
+                <span style={{ fontWeight: 400, textTransform: "none" }}> (optional)</span></label>
+              <input style={inp} value={form.kidName} onChange={e => set("kidName", e.target.value)}
+                placeholder={type === "pregnancy" ? "e.g. Baby Bean" : "e.g. Oliver"} />
+            </div>
+
+            {type === "pregnancy" && !isConvert ? (
+              <div>
+                <label style={lbl}>How far along?</label>
+                <div style={{ display: "flex", gap: "8px", marginBottom: "9px" }}>
+                  {["dueDate","weeks"].map(mode => (
+                    <button key={mode} onClick={() => set("inputMode", mode)} style={{
+                      flex: 1, padding: "8px", borderRadius: "8px", border: "none",
+                      fontFamily: "inherit", fontSize: "13px", fontWeight: 600, cursor: "pointer",
+                      background: form.inputMode === mode ? "#2c2c2c" : "#f0ede6",
+                      color: form.inputMode === mode ? "#fff" : "#555" }}>
+                      {mode === "dueDate" ? "Due Date" : "Weeks Along"}
+                    </button>
+                  ))}
+                </div>
+                {form.inputMode === "dueDate"
+                  ? <input type="date" style={inp} value={form.dueDate} onChange={e => set("dueDate", e.target.value)} />
+                  : <input type="number" style={inp} value={form.weeksInput}
+                      onChange={e => set("weeksInput", e.target.value)} placeholder="e.g. 24" min="1" max="42" />
+                }
+              </div>
+            ) : (
+              <div>
+                <label style={lbl}>Birth Date</label>
+                <input type="date" style={inp} value={form.birthDate}
+                  onChange={e => set("birthDate", e.target.value)}
+                  max={new Date().toISOString().split("T")[0]} />
+              </div>
+            )}
+
+            <div>
+              <label style={lbl}>Gender</label>
+              <div style={{ display: "flex", gap: "7px", flexWrap: "wrap" }}>
+                {GENDER_OPTIONS.map(g => {
+                  const s = GENDER_STYLES[g]; const sel = form.gender === g;
+                  return (
+                    <button key={g} onClick={() => set("gender", g)} style={{
+                      padding: "7px 13px", borderRadius: "20px", cursor: "pointer",
+                      fontFamily: "inherit", fontSize: "13px", fontWeight: 600, border: "none",
+                      background: sel ? s.bg : "#f5f5f0", color: sel ? s.accent : "#888",
+                      outline: sel ? `2px solid ${s.accent}` : "none", outlineOffset: "1px" }}>
+                      {s.emoji} {g}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div>
+              <label style={lbl}>Notes <span style={{ fontWeight: 400, textTransform: "none" }}>(optional)</span></label>
+              <textarea style={{ ...inp, resize: "vertical", minHeight: "58px" }}
+                value={form.notes} onChange={e => set("notes", e.target.value)}
+                placeholder="Registry link, hospital, fun facts…" />
+            </div>
+
+            <div style={{ display: "flex", gap: "10px", marginTop: "2px" }}>
+              <button onClick={onClose} style={{ ...Btn("#f0ede6","#555"), flex: 1, padding: "12px" }}>Cancel</button>
+              <button onClick={handleSave} style={{ ...Btn("#2c2c2c","#fff"), flex: 2, padding: "12px", fontSize: "15px" }}>
+                {isConvert ? "Save as Born 🎉" : entry?.id ? "Save Changes" : "Add ✨"}
+              </button>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    // ─── Summary pill ──────────────────────────────────────────────────────────
+
+    function SummaryPill({ emoji, count, label, color, bg }) {
+      return (
+        <div style={{ background: bg, color, borderRadius: "12px", padding: "5px 12px",
+          fontSize: "12px", fontWeight: 700, display: "flex", alignItems: "center", gap: "5px" }}>
+          {emoji} <span>{count}</span> <span style={{ fontWeight: 500 }}>{label}</span>
+        </div>
+      );
+    }
+
+    // ─── App ───────────────────────────────────────────────────────────────────
+
+    function App() {
+      const [entries, setEntries]     = useState(() => loadEntries());
+      const [tab, setTab]             = useState("all");
+      const [sort, setSort]           = useState("name");
+      const [showModal, setShowModal] = useState(false);
+      const [editing, setEditing]     = useState(null);
+      const [defaultType, setDefaultType] = useState("pregnancy");
+
+      function persist(list) { setEntries(list); saveEntries(list); }
+
+      function handleSave(entry) {
+        let updated;
+        if (entry._replaceId) {
+          updated = entries.filter(e => e.id !== entry._replaceId)
+            .concat({ ...entry, _replaceId: undefined });
+        } else if (editing?.id && !editing._convertToBorn) {
+          updated = entries.map(e => e.id === entry.id ? entry : e);
+        } else {
+          updated = [...entries, entry];
+        }
+        persist(updated);
+        setShowModal(false);
+        setEditing(null);
+      }
+
+      function handleDelete(id) { persist(entries.filter(e => e.id !== id)); }
+      function handleEdit(entry) { setEditing(entry); setShowModal(true); }
+      function openAdd(type) { setEditing(null); setDefaultType(type); setShowModal(true); }
+
+      const filtered = entries.filter(e =>
+        tab === "pregnant" ? e.type === "pregnancy" :
+        tab === "born"     ? e.type === "born" : true
+      );
+      const sorted = [...filtered].sort((a, b) => {
+        if (sort === "name") return a.friendName.localeCompare(b.friendName);
+        if (sort === "age") {
+          const ageA = a.type === "born" ? getAge(a.birthDate).days : a.weeks * 7;
+          const ageB = b.type === "born" ? getAge(b.birthDate).days : b.weeks * 7;
+          return ageB - ageA;
+        }
+        return 0;
+      });
+
+      const pregnant = entries.filter(e => e.type === "pregnancy");
+      const born     = entries.filter(e => e.type === "born");
+
+      const tabBtn = (val, label, count) => (
+        <button onClick={() => setTab(val)} style={{
+          padding: "8px 16px", borderRadius: "20px", border: "none",
+          fontFamily: "inherit", fontSize: "13px", fontWeight: 700, cursor: "pointer",
+          background: tab === val ? "#2c2c2c" : "#ede8df",
+          color: tab === val ? "#fff" : "#666",
+          display: "flex", alignItems: "center", gap: "6px" }}>
+          {label}
+          {count > 0 && (
+            <span style={{ background: tab === val ? "rgba(255,255,255,0.25)" : "#ccc",
+              color: tab === val ? "#fff" : "#555",
+              borderRadius: "10px", padding: "1px 7px", fontSize: "11px", fontWeight: 800 }}>
+              {count}
+            </span>
+          )}
+        </button>
+      );
+
+      return (
+        <div style={{ minHeight: "100vh", background: "#faf8f3",
+          fontFamily: "'DM Sans','Helvetica Neue',sans-serif", paddingBottom: "88px" }}>
+
+          {/* Header */}
+          <div style={{ background: "#fff", borderBottom: "1.5px solid #ede8df",
+            padding: "22px 20px 18px", position: "sticky", top: 0, zIndex: 10 }}>
+            <div style={{ maxWidth: "560px", margin: "0 auto" }}>
+              <div style={{ fontFamily: "'Playfair Display', serif", fontSize: "26px",
+                fontWeight: 700, color: "#2c2c2c" }}>Baby Watch 🌸</div>
+              <div style={{ fontSize: "13px", color: "#bbb", marginTop: "2px" }}>Bumps, births & beyond</div>
+              {entries.length > 0 && (
+                <div style={{ display: "flex", gap: "8px", marginTop: "14px", flexWrap: "wrap" }}>
+                  <SummaryPill emoji="🤰" count={pregnant.length} label="pregnant" color="#d81b60" bg="#fce4ec" />
+                  <SummaryPill emoji="👶" count={born.length} label="born" color="#2e7d32" bg="#e8f5e9" />
+                  {born.length > 0 && (
+                    <SummaryPill emoji="🎂"
+                      count={born.filter(e => new Date(e.birthDate + "T12:00:00").getMonth() === new Date().getMonth()).length}
+                      label="bdays this month" color="#f57c00" bg="#fff3e0" />
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div style={{ maxWidth: "560px", margin: "0 auto", padding: "18px 16px 0" }}>
+
+            {/* Tabs + Sort */}
+            {entries.length > 0 && (
+              <div style={{ display: "flex", gap: "8px", marginBottom: "16px",
+                alignItems: "center", flexWrap: "wrap" }}>
+                {tabBtn("all", "All", entries.length)}
+                {tabBtn("pregnant", "🤰 Pregnant", pregnant.length)}
+                {tabBtn("born", "👶 Born", born.length)}
+                <div style={{ marginLeft: "auto", display: "flex", gap: "6px" }}>
+                  {[["name","A–Z"],["age","Age"]].map(([val,lbl]) => (
+                    <button key={val} onClick={() => setSort(val)} style={{
+                      padding: "6px 11px", borderRadius: "20px", border: "none",
+                      cursor: "pointer", fontFamily: "inherit", fontSize: "12px", fontWeight: 600,
+                      background: sort === val ? "#2c2c2c" : "#ede8df",
+                      color: sort === val ? "#fff" : "#777" }}>{lbl}</button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Empty state */}
+            {entries.length === 0 && (
+              <div style={{ textAlign: "center", padding: "70px 20px", color: "#ccc" }}>
+                <div style={{ fontSize: "54px", marginBottom: "14px" }}>🌸</div>
+                <div style={{ fontFamily: "'Playfair Display', serif", fontSize: "21px",
+                  color: "#d4cfc6", marginBottom: "8px" }}>Nothing tracked yet</div>
+                <div style={{ fontSize: "14px" }}>Use the buttons below to get started</div>
+              </div>
+            )}
+
+            {/* Cards */}
+            <div style={{ display: "flex", flexDirection: "column", gap: "13px" }}>
+              {sorted.map(e => e.type === "pregnancy"
+                ? <PregnancyCard key={e.id} entry={e} onEdit={handleEdit} onDelete={() => handleDelete(e.id)} />
+                : <KidCard       key={e.id} entry={e} onEdit={handleEdit} onDelete={() => handleDelete(e.id)} />
+              )}
+            </div>
+          </div>
+
+          {/* Sticky bottom bar */}
+          <div style={{ position: "fixed", bottom: 0, left: 0, right: 0, zIndex: 20,
+            background: "rgba(255,255,255,0.95)", backdropFilter: "blur(10px)",
+            borderTop: "1.5px solid #ede8df", padding: "12px 20px",
+            display: "flex", gap: "10px", justifyContent: "center" }}>
+            <button onClick={() => openAdd("pregnancy")} style={{
+              ...Btn("#fce4ec","#d81b60"), flex: 1, maxWidth: "220px",
+              padding: "13px 16px", fontSize: "14px", borderRadius: "14px" }}>
+              🤰 Add Pregnancy
+            </button>
+            <button onClick={() => openAdd("born")} style={{
+              ...Btn("#e8f5e9","#2e7d32"), flex: 1, maxWidth: "220px",
+              padding: "13px 16px", fontSize: "14px", borderRadius: "14px" }}>
+              👶 Add Kid
+            </button>
+          </div>
+
+          {showModal && (
+            <Modal entry={editing} defaultType={defaultType} onSave={handleSave}
+              onClose={() => { setShowModal(false); setEditing(null); }} />
+          )}
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+  </script>
+</body>
+</html>
