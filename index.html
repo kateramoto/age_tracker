@@ -290,22 +290,45 @@
       const [offset, setOffset] = useState(0);
       const [swiped, setSwiped] = useState(false);
       const startXRef = useRef(null);
+      const startYRef = useRef(null);
+      const lockedRef = useRef(null);
       const DELETE_W = 80;
 
-      function onTouchStart(e) { startXRef.current = e.touches[0].clientX; }
+      function onTouchStart(e) {
+        startXRef.current = e.touches[0].clientX;
+        startYRef.current = e.touches[0].clientY;
+        lockedRef.current = null;
+      }
       function onTouchMove(e) {
         if (startXRef.current == null) return;
         const dx = e.touches[0].clientX - startXRef.current;
+        const dy = e.touches[0].clientY - startYRef.current;
+
+        // Lock scroll direction once we know intent (after 6px of movement)
+        if (!lockedRef.current) {
+          if (Math.abs(dx) < 6 && Math.abs(dy) < 6) return;
+          lockedRef.current = Math.abs(dx) > Math.abs(dy) ? "horiz" : "vert";
+        }
+        if (lockedRef.current === "vert") return;
+
+        // Require at least 12px horizontal before the card starts moving
+        if (Math.abs(dx) < 12) return;
+
         if (swiped) setOffset(Math.min(0, -DELETE_W + dx));
-        else if (dx < 0) setOffset(Math.max(dx, -DELETE_W - 10));
+        else if (dx < 0) setOffset(Math.max(dx + 12, -DELETE_W - 10));
       }
       function onTouchEnd(e) {
+        if (lockedRef.current !== "horiz") {
+          startXRef.current = null;
+          return;
+        }
         const dx = startXRef.current != null ? e.changedTouches[0].clientX - startXRef.current : 0;
         if (swiped) {
           if (dx > DELETE_W / 2) { setOffset(0); setSwiped(false); }
           else setOffset(-DELETE_W);
         } else {
-          if (offset < -DELETE_W / 2) { setOffset(-DELETE_W); setSwiped(true); }
+          // Require swiping at least 2/3 of DELETE_W to snap open
+          if (offset < -(DELETE_W * 0.66)) { setOffset(-DELETE_W); setSwiped(true); }
           else setOffset(0);
         }
         startXRef.current = null;
