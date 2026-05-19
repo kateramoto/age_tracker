@@ -114,12 +114,40 @@
     }
     function fmtDate(s) {
       if (!s) return "";
-      // Parse YYYY-MM-DD manually to avoid timezone/Safari PWA issues
       const parts = String(s).split(/[-\/]/);
-      if (parts.length < 3) return s;
+      if (parts.length < 3) {
+        // Month-year only: YYYY-MM
+        if (parts.length === 2) {
+          const d = new Date(parseInt(parts[0]), parseInt(parts[1]) - 1, 1);
+          return d.toLocaleDateString("en-US", { month: "long", year: "numeric" });
+        }
+        return s;
+      }
       const year = parseInt(parts[0]), month = parseInt(parts[1]) - 1, day = parseInt(parts[2]);
       const d = new Date(year, month, day);
       return d.toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" });
+    }
+    function isMonthYearOnly(s) {
+      if (!s) return false;
+      const parts = String(s).split(/[-\/]/);
+      return parts.length === 2;
+    }
+    function getAgeFromMonthYear(s) {
+      // Treat as born on 1st of that month
+      const parts = String(s).split(/[-\/]/);
+      const birth = new Date(parseInt(parts[0]), parseInt(parts[1]) - 1, 1);
+      const now = new Date();
+      let years = now.getFullYear() - birth.getFullYear();
+      let months = now.getMonth() - birth.getMonth();
+      if (months < 0) { years--; months += 12; }
+      return { years, months, totalMonths: years * 12 + months, days: Math.floor((now - birth) / 86400000), approximate: true };
+    }
+    function formatAgeApprox({ years, months, totalMonths }) {
+      // Without exact day, only show years (and months if < 2yr)
+      if (totalMonths < 2)  return "Newborn";
+      if (totalMonths < 24) return `${totalMonths}mo old`;
+      if (months === 0)     return `${years}yr old`;
+      return `${years}yr old`;
     }
 
     // ─── Shared UI ─────────────────────────────────────────────────────────────
@@ -403,9 +431,14 @@
     }
 
     function KidCard({ entry, onEdit, onDelete }) {
-      const age = getAge(entry.birthDate);
+      const monthYearOnly = isMonthYearOnly(entry.birthDate);
+      const age   = monthYearOnly ? getAgeFromMonthYear(entry.birthDate) : getAge(entry.birthDate);
       const stage = getAgeStage(age.totalMonths);
       const gStyle = GENDER_STYLES[entry.gender] || GENDER_STYLES["Unknown"];
+      const ageLabel = monthYearOnly ? formatAgeApprox(age) : formatAge(age);
+      const ringLabel = age.totalMonths < 24
+        ? `${age.totalMonths}m`
+        : `${Math.floor(age.totalMonths / 12)}y`;
       return (
         <SwipeCard onDelete={onDelete}>
           <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: "4px",
@@ -413,19 +446,20 @@
             boxShadow: "0 1px 6px rgba(74,55,40,0.06)", position: "relative", overflow: "hidden" }}>
             <div style={{ position: "absolute", top: 0, left: 0, bottom: 0, width: "3px", background: stage.color }} />
             <div style={{ display: "flex", alignItems: "center", gap: "12px", paddingLeft: "6px" }}>
-              <MiniRing pct={age.totalMonths / 144} color={stage.color}
-                label={age.totalMonths < 24 ? `${age.totalMonths}m` : `${Math.floor(age.totalMonths/12)}y`} />
+              <MiniRing pct={age.totalMonths / 144} color={stage.color} label={ringLabel} />
               <div style={{ flex: 1, minWidth: 0 }}>
                 <ParentNames entry={entry} />
                 {entry.kidName && <div style={{ fontSize: "12px", color: stage.color, fontWeight: 500, marginTop: "1px", fontStyle: "italic" }}>{gStyle.emoji} {entry.kidName}</div>}
-                <div style={{ fontSize: "11px", color: C.textLight, marginTop: "2px", letterSpacing: "0.03em" }}>Born {fmtDate(entry.birthDate)}</div>
+                <div style={{ fontSize: "11px", color: C.textLight, marginTop: "2px", letterSpacing: "0.03em" }}>
+                  Born {fmtDate(entry.birthDate)}{monthYearOnly ? " (approx)" : ""}
+                </div>
               </div>
               <button onClick={() => onEdit(entry)} style={{ background: C.brownLight, border: "none", borderRadius: "3px",
                 width: "30px", height: "30px", display: "flex", alignItems: "center", justifyContent: "center",
                 cursor: "pointer", color: C.textMid, flexShrink: 0 }}><PencilIcon /></button>
             </div>
             <div style={{ display: "flex", gap: "5px", flexWrap: "wrap", paddingLeft: "6px" }}>
-              <Chip label={formatAge(age)} bg={stage.bg} color={stage.color} />
+              <Chip label={ageLabel} bg={stage.bg} color={stage.color} />
               <Chip label={stage.label} bg={stage.bg} color={stage.color} />
               <Chip label={`${gStyle.emoji} ${entry.gender}`} bg={gStyle.bg} color={gStyle.accent} />
             </div>
@@ -444,13 +478,18 @@
       const [form, setForm] = useState(() => {
         if (isConvert) return { friendName: entry.friendName, friendName2: entry.friendName2 || "",
           kidName: entry.kidName || "", gender: entry.gender === "Surprise" ? "Unknown" : entry.gender,
-          birthDate: entry.dueDate, notes: entry.notes || "", inputMode: "birthDate" };
+          birthDate: entry.dueDate, notes: entry.notes || "", inputMode: "birthDate",
+          birthDateMode: "full" };
         if (entry) return { friendName: entry.friendName || "", friendName2: entry.friendName2 || "",
           kidName: entry.kidName || "", gender: entry.gender || "Unknown", dueDate: entry.dueDate || "",
           weeksInput: entry.weeks ? String(entry.weeks) : "", birthDate: entry.birthDate || "",
-          notes: entry.notes || "", inputMode: entry.inputMode || "dueDate" };
+          notes: entry.notes || "", inputMode: entry.inputMode || "dueDate",
+          birthDateMode: isMonthYearOnly(entry.birthDate) ? "monthYear" : "full",
+          birthMonth: isMonthYearOnly(entry.birthDate) ? entry.birthDate.split("-")[1] : "",
+          birthYear:  isMonthYearOnly(entry.birthDate) ? entry.birthDate.split("-")[0] : "" };
         return { friendName: "", friendName2: "", kidName: "", gender: "Unknown",
-          dueDate: "", weeksInput: "", birthDate: "", notes: "", inputMode: "dueDate" };
+          dueDate: "", weeksInput: "", birthDate: "", notes: "", inputMode: "dueDate",
+          birthDateMode: "full", birthMonth: "", birthYear: "" };
       });
 
       function set(k, v) { setForm(f => ({ ...f, [k]: v })); }
@@ -473,11 +512,22 @@
             notes: form.notes.trim(), inputMode: form.inputMode,
             _replaceId: isConvert ? entry.id : null });
         } else {
-          if (!form.birthDate) return alert("Please enter a birth date.");
-          if (getAge(form.birthDate).days < 0) return alert("Birth date can't be in the future.");
+          let birthDate;
+          if (form.birthDateMode === "monthYear") {
+            if (!form.birthMonth || !form.birthYear) return alert("Please enter a month and year.");
+            const y = parseInt(form.birthYear), m = parseInt(form.birthMonth);
+            if (isNaN(y) || y < 1990 || y > new Date().getFullYear()) return alert("Please enter a valid year.");
+            if (isNaN(m) || m < 1 || m > 12) return alert("Please enter a valid month.");
+            if (y === new Date().getFullYear() && m > new Date().getMonth() + 1) return alert("Birth month can't be in the future.");
+            birthDate = `${y}-${String(m).padStart(2, "0")}`;
+          } else {
+            if (!form.birthDate) return alert("Please enter a birth date.");
+            if (getAge(form.birthDate).days < 0) return alert("Birth date can't be in the future.");
+            birthDate = form.birthDate;
+          }
           onSave({ type: "born", id: isConvert ? Date.now() : (entry?.id || Date.now()),
             friendName: form.friendName.trim(), friendName2: form.friendName2.trim(),
-            kidName: form.kidName.trim(), gender: form.gender, birthDate: form.birthDate,
+            kidName: form.kidName.trim(), gender: form.gender, birthDate,
             notes: form.notes.trim(), _replaceId: isConvert ? entry.id : null });
         }
       }
@@ -537,9 +587,32 @@
                   : <input type="number" style={inp} value={form.weeksInput} onChange={e => set("weeksInput", e.target.value)} placeholder="e.g. 24" min="1" max="42" />}
               </div>
             ) : (
-              <div><label style={lbl}>Birth Date</label>
-                <input type="date" style={inp} value={form.birthDate} onChange={e => set("birthDate", e.target.value)}
-                  max={new Date().toISOString().split("T")[0]} /></div>
+              <div>
+                <label style={lbl}>Birth Date</label>
+                <div style={{ display: "flex", gap: "1px", background: C.border, borderRadius: "3px", overflow: "hidden", marginBottom: "10px" }}>
+                  {[["full","Full Date"],["monthYear","Month & Year"]].map(([val, l]) => (
+                    <button key={val} onClick={() => set("birthDateMode", val)} style={{
+                      flex: 1, padding: "8px", border: "none", fontFamily: SANS, fontSize: "12px",
+                      fontWeight: 500, cursor: "pointer", letterSpacing: "0.06em", textTransform: "uppercase",
+                      background: form.birthDateMode === val ? C.brown : C.brownLight,
+                      color: form.birthDateMode === val ? C.white : C.textMid }}>{l}</button>
+                  ))}
+                </div>
+                {form.birthDateMode === "full"
+                  ? <input type="date" style={inp} value={form.birthDate} onChange={e => set("birthDate", e.target.value)}
+                      max={new Date().toISOString().split("T")[0]} />
+                  : <div style={{ display: "flex", gap: "8px" }}>
+                      <select style={{ ...inp, flex: 1 }} value={form.birthMonth} onChange={e => set("birthMonth", e.target.value)}>
+                        <option value="">Month</option>
+                        {["January","February","March","April","May","June","July","August","September","October","November","December"]
+                          .map((m, i) => <option key={i} value={String(i+1).padStart(2,"0")}>{m}</option>)}
+                      </select>
+                      <input type="number" style={{ ...inp, flex: 1 }} value={form.birthYear}
+                        onChange={e => set("birthYear", e.target.value)}
+                        placeholder="Year" min="1990" max={new Date().getFullYear()} />
+                    </div>
+                }
+              </div>
             )}
             <div>
               <label style={lbl}>Gender</label>
